@@ -114,9 +114,9 @@ textarea.in{resize:vertical;min-height:84px;line-height:1.5;}
 .ring .val{position:absolute;inset:0;display:grid;place-items:center;font-weight:800;font-size:30px;color:var(--deep);}
 
 /* table */
-table.t{width:100%;border-collapse:collapse;font-size:13px;}
+table.t{width:100%;border-collapse:collapse;font-size:13px;color:var(--ink);}
 table.t th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;padding:8px 10px;border-bottom:1px solid var(--line);}
-table.t td{padding:10px;border-bottom:1px solid #eef3f9;vertical-align:top;}
+table.t td{padding:10px;border-bottom:1px solid #eef3f9;vertical-align:top;color:var(--ink);}
 table.t tr:last-child td{border-bottom:none;}
 
 /* dark surface (ISP chrome / hero) */
@@ -131,10 +131,10 @@ table.t tr:last-child td{border-bottom:none;}
 .kv .k{color:var(--muted);font-weight:600;}
 .kv .v{font-weight:700;text-align:right;}
 .accordion{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:10px;}
-.accordion>summary{cursor:pointer;list-style:none;padding:13px 16px;font-weight:700;font-size:14px;display:flex;justify-content:space-between;align-items:center;background:#fbfdff;}
+.accordion>summary{cursor:pointer;list-style:none;padding:13px 16px;font-weight:700;font-size:14px;display:flex;justify-content:space-between;align-items:center;background:#fbfdff;color:var(--deep);}
 .accordion>summary::-webkit-details-marker{display:none;}
 .accordion[open]>summary{border-bottom:1px solid var(--line);}
-.accordion .body{padding:14px 16px;}
+.accordion .body{padding:14px 16px;color:var(--ink);background:#fff;}
 pre.json{background:#0b1f4a;color:#cfe3f7;border-radius:10px;padding:14px;overflow:auto;font-size:12px;line-height:1.5;margin:0;}
 .spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;}
 .spinner.blue{border-color:var(--t2);border-top-color:var(--bright);}
@@ -189,3 +189,9 @@ pre.json{background:#0b1f4a;color:#cfe3f7;border-radius:10px;padding:14px;overfl
 .ecard .in2{padding:13px;}
 .amex-verify{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:.04em;color:var(--bright);}
 .amex-verify .m{background:var(--bright);color:#fff;border-radius:5px;padding:2px 6px;font-size:10px;letter-spacing:.12em;}
+.fline{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #eef3f9;font-size:14px;line-height:1.45;color:var(--ink);}
+.fline:last-child{border-bottom:none;}
+.fico{width:22px;height:22px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;font-size:12px;font-weight:800;margin-top:1px;}
+.fico.match{background:#e3f5ee;color:var(--good);}
+.fico.partial{background:#fbf1de;color:var(--warn);}
+.fico.mismatch{background:#fbe4e4;color:var(--bad);}

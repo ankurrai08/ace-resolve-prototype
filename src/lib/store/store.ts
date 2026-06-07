@@ -39,13 +39,6 @@ function seedAgents(s: Store) {
       registered_at: "2026-03-01T00:00:00Z",
     },
     {
-      agent_id: "agt_shopwise",
-      name: "ShopWise Assistant",
-      status: "verified",
-      capabilities: ["retail", "groceries"],
-      registered_at: "2026-04-10T00:00:00Z",
-    },
-    {
       agent_id: "agt_unverified",
       name: "QuickBuy Bot",
       status: "unverified",

@@ -1,8 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import ScoreRing from "@/components/ScoreRing";
-import FieldTable from "@/components/FieldTable";
 import type {
   ActualPurchase,
   Agent,
@@ -380,27 +378,44 @@ function CardView({ card }: { card: Card }) {
   }
   if (card.kind === "verdict") {
     const c = card.c;
+    const issues = c.fidelity.per_field.filter((f) => f.status !== "match");
+    const honored = c.fidelity.per_field.filter((f) => f.status === "match");
     return (
       <div className="ecard">
         <div className="top">
-          <span className="amex-verify"><span className="m">AMEX</span> ACE Resolve · intent check</span>
+          <span className="amex-verify"><span className="m">AMEX</span> Checked with American Express</span>
           {routePill(c.routing.route)}
         </div>
         <div className="in2">
-          <div className="row" style={{ gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <ScoreRing score={c.fidelity.score} size={88} />
-            <div style={{ flex: "1 1 240px" }}>
-              <div className="divtag">Intent fidelity · {Math.round(c.fidelity.confidence * 100)}% conf.</div>
-              <div style={{ fontWeight: 700, color: "var(--deep)", marginTop: 4, lineHeight: 1.4 }}>{c.fidelity.verdict}</div>
-            </div>
+          <div style={{ fontSize: 15.5, fontWeight: 700, color: "var(--deep)", lineHeight: 1.45 }}>
+            {c.fidelity.verdict}
           </div>
-          <div style={{ marginTop: 12, overflowX: "auto" }}>
-            <FieldTable fields={c.fidelity.per_field} />
+
+          <div style={{ marginTop: 12 }}>
+            {issues.map((f, i) => (
+              <div key={"i" + i} className="fline">
+                <span className={"fico " + f.status}>{f.status === "mismatch" ? "✕" : "!"}</span>
+                <div>
+                  <b style={{ textTransform: "capitalize" }}>{f.field}</b>{" "}
+                  <span className="muted">— you asked for <b style={{ color: "var(--deep)" }}>{f.expected}</b>, but it went with <b style={{ color: "var(--bad)" }}>{f.actual}</b>.</span>
+                  {f.note ? <div className="small muted" style={{ marginTop: 2 }}>{f.note}</div> : null}
+                </div>
+              </div>
+            ))}
+            {honored.map((f, i) => (
+              <div key={"h" + i} className="fline">
+                <span className="fico match">✓</span>
+                <div>
+                  <b style={{ textTransform: "capitalize" }}>{f.field}</b>{" "}
+                  <span className="muted">— just as you asked{f.actual ? ` (${f.actual})` : ""}.</span>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="panel" style={{ marginTop: 12, background: "#fff" }}>
-            <div className="divtag">Recommended resolution</div>
-            <div style={{ fontWeight: 700, color: "var(--deep)", marginTop: 4 }}>{c.routing.remedy}</div>
-            <div className="small muted" style={{ marginTop: 4 }}>{c.routing.rationale}</div>
+
+          <div className="panel" style={{ marginTop: 14, background: "#fff", borderColor: "var(--t3)" }}>
+            <div className="amex-verify" style={{ marginBottom: 4 }}>What I can do for you</div>
+            <div style={{ fontWeight: 700, color: "var(--deep)" }}>{c.routing.remedy}</div>
           </div>
         </div>
       </div>
