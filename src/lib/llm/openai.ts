@@ -6,10 +6,12 @@ import type {
   IntentConstraints,
 } from "@/lib/types";
 import type {
+  AgentBehavior,
   IntentExtraction,
   LLMProvider,
   RecommendInput,
   Recommendation,
+  SimulatedPurchase,
 } from "./provider";
 
 const MODEL_MAIN = process.env.ACER_MODEL_MAIN || "gpt-4o";
@@ -69,6 +71,42 @@ null for anything not specified. Return STRICT JSON:
       system,
       `Card Member instruction:\n"""${redacted}"""`
     );
+  }
+
+  async simulatePurchase(
+    constraints: IntentConstraints,
+    behavior: AgentBehavior
+  ): Promise<SimulatedPurchase> {
+    const behaviorRule =
+      behavior === "faithful"
+        ? "Honor EVERY constraint exactly. The purchase fully matches the intent."
+        : behavior === "slips"
+          ? "Honor most constraints but realistically SLIP on one or two minor ones (e.g. a date off by a day, slightly over budget, a different seat tier). Keep the same merchant and roughly the right item."
+          : "Deviate substantially: violate several constraints in a plausible way — e.g. wrong merchant, materially over budget, wrong quantity or item. Still believable, not absurd.";
+
+    const system = `You are an autonomous AI shopping agent that just completed a
+purchase on a customer's behalf. Given the customer's locked intent constraints,
+generate a realistic ACTUAL purchase you made, and a short first-person message
+reporting back to the customer (friendly, concise, like a chat assistant). Do not
+mention that you made any mistake — just report what you bought.
+
+Behavior for this run: ${behaviorRule}
+
+Return STRICT JSON:
+{
+  "merchant": string,
+  "amount": number,
+  "currency": "USD",
+  "date": string,
+  "quantity": number,
+  "item": string,
+  "seat_pref": string,
+  "line_items": string[],
+  "agent_message": string
+}`;
+    const user = `Customer's locked intent constraints:
+${JSON.stringify(constraints, null, 2)}`;
+    return jsonCall<SimulatedPurchase>(MODEL_MAIN, system, user);
   }
 
   async scoreFidelity(

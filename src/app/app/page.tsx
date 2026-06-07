@@ -1,380 +1,421 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import TopBar from "@/components/TopBar";
 import ScoreRing from "@/components/ScoreRing";
 import FieldTable from "@/components/FieldTable";
-import type { Agent, Case, IntentContract, PaymentToken } from "@/lib/types";
+import type {
+  ActualPurchase,
+  Agent,
+  Case,
+  IntentContract,
+  PaymentToken,
+} from "@/lib/types";
 
-const NAMES = ["Sarah Chen", "Marcus Reed", "Priya Nair", "David Okafor", "Elena Rossi", "James Whitfield"];
-const INSTRUCTIONS = [
+type Behavior = "faithful" | "slips" | "rogue";
+type Stage = "await_intent" | "busy" | "await_review" | "decided" | "resolved" | "escalated";
+
+type Card =
+  | { kind: "intent"; intent: IntentContract; token: PaymentToken; notes: string }
+  | { kind: "receipt"; purchase: ActualPurchase }
+  | { kind: "verdict"; c: Case }
+  | { kind: "escalated"; c: Case };
+
+type Msg = { id: string; role: "assistant" | "user"; text?: string; card?: Card };
+
+const EXAMPLES = [
   "Book two tickets to the jazz festival on Saturday the 14th, aisle seats, under $400 total, only on Ticketmaster.",
   "Order a 65-inch OLED TV, no more than $1,200, from Best Buy, delivered this week.",
   "Get my weekly grocery run from Whole Foods, keep it under $150, no seafood.",
-  "Book a one-night stay near downtown Austin for the 20th, under $250, refundable rate only.",
-  "Buy running shoes, men's size 11, under $130, from Nike only.",
-  "Reserve a table for 4 and pre-pay the deposit, max $80, at any Italian restaurant downtown.",
+  "Buy men's running shoes size 11, under $130, from Nike only.",
 ];
 
-type Actual = {
-  merchant: string;
-  amount: number;
-  date: string;
-  quantity: number;
-  item: string;
-  seat_pref: string;
-};
+let _id = 0;
+const nid = () => `m${_id++}`;
 
-function rand<T>(a: T[]): T {
-  return a[Math.floor(Math.random() * a.length)];
-}
-
-export default function CardMemberApp() {
+export default function AssistantChat() {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [step, setStep] = useState<"build" | "locked" | "result">("build");
-
-  const [cardName, setCardName] = useState("Sarah Chen");
-  const [instruction, setInstruction] = useState(INSTRUCTIONS[0]);
   const [agentId, setAgentId] = useState("agt_concierge");
+  const [behavior, setBehavior] = useState<Behavior>("slips");
+  const [name, setName] = useState("Sarah Chen");
 
-  const [intent, setIntent] = useState<IntentContract | null>(null);
-  const [token, setToken] = useState<PaymentToken | null>(null);
-  const [notes, setNotes] = useState("");
+  const [msgs, setMsgs] = useState<Msg[]>([
+    {
+      id: nid(),
+      role: "assistant",
+      text:
+        "Hi Sarah 👋 I'm your shopping agent. Tell me what you'd like me to buy — I'll stay within whatever budget and rules you give me, and pay securely with your American Express card.",
+    },
+  ]);
+  const [stage, setStage] = useState<Stage>("await_intent");
+  const [typing, setTyping] = useState(false);
+  const [input, setInput] = useState("");
 
-  const [actual, setActual] = useState<Actual>({
-    merchant: "",
-    amount: 0,
-    date: "",
-    quantity: 1,
-    item: "",
-    seat_pref: "",
-  });
-
-  const [caseData, setCaseData] = useState<Case | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const intentRef = useRef<IntentContract | null>(null);
+  const actualRef = useRef<ActualPurchase | null>(null);
+  const caseRef = useRef<Case | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch("/api/agents").then((r) => r.json()).then((d) => setAgents(d.agents || []));
   }, []);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [msgs, typing]);
 
-  function surprise() {
-    setCardName(rand(NAMES));
-    setInstruction(rand(INSTRUCTIONS));
-    setAgentId(rand(["agt_concierge", "agt_shopwise", "agt_unverified"]));
-  }
+  const add = (m: Omit<Msg, "id">) => setMsgs((p) => [...p, { id: nid(), ...m }]);
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  async function lockIntent() {
-    setBusy(true);
-    setErr("");
+  async function startDelegation(instruction: string) {
+    add({ role: "user", text: instruction });
+    setStage("busy");
+    setTyping(true);
     try {
+      // 1. lock the intent
       const r = await fetch("/api/scenario", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ card_name: cardName, instruction }),
+        body: JSON.stringify({ card_name: name, instruction }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "failed to lock intent");
-      setIntent(d.intent);
-      setToken(d.token);
-      setNotes(d.notes || "");
-      // prefill "what the agent did" from the locked intent (a near-match by default)
-      const c = d.intent.constraints;
-      setActual({
-        merchant: (c.merchants && c.merchants[0]) || "",
-        amount: c.budget_total || 0,
-        date: c.date_window || "",
-        quantity: c.quantity || 1,
-        item: c.item || "",
-        seat_pref: c.seat_pref || "",
+      if (!r.ok) throw new Error(d.error);
+      intentRef.current = d.intent;
+      setTyping(false);
+      add({
+        role: "assistant",
+        text: "Got it. I've locked this as your purchase intent with American Express — here are the limits I'll shop within:",
       });
-      setStep("locked");
+      add({ role: "assistant", card: { kind: "intent", intent: d.intent, token: d.token, notes: d.notes } });
+
+      // 2. agent shops (LLM-simulated, steered by behavior knob)
+      await sleep(500);
+      setTyping(true);
+      const pr = await fetch("/api/agent-purchase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent_id: d.intent.intent_id, behavior }),
+      });
+      const pd = await pr.json();
+      if (!pr.ok) throw new Error(pd.error);
+      actualRef.current = pd.purchase;
+      setTyping(false);
+      add({ role: "assistant", text: pd.purchase.agent_message || "All done — here's your confirmation:" });
+      add({ role: "assistant", card: { kind: "receipt", purchase: pd.purchase } });
+      add({ role: "assistant", text: "Does this look right?" });
+      setStage("await_review");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "error");
-    } finally {
-      setBusy(false);
+      setTyping(false);
+      add({ role: "assistant", text: `⚠️ ${e instanceof Error ? e.message : "Something went wrong"}` });
+      setStage("await_intent");
     }
   }
 
-  async function runAnalysis() {
-    if (!intent) return;
-    setBusy(true);
-    setErr("");
+  async function dispute(userText?: string) {
+    add({ role: "user", text: userText || "Wait — that's not what I asked for." });
+    setStage("busy");
+    setTyping(true);
     try {
+      await sleep(300);
+      add({
+        role: "assistant",
+        text: "Let me check this purchase against your locked intent with American Express…",
+      });
       const r = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intent_id: intent.intent_id, agent_id: agentId, actual }),
+        body: JSON.stringify({
+          intent_id: intentRef.current?.intent_id,
+          agent_id: agentId,
+          actual: actualRef.current,
+        }),
       });
       const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "analysis failed");
-      setCaseData(d.case);
-      setStep("result");
+      if (!r.ok) throw new Error(d.error);
+      const c: Case = d.case;
+      caseRef.current = c;
+      setTyping(false);
+      add({ role: "assistant", card: { kind: "verdict", c } });
+
+      if (c.routing.route === "colleague_assist") {
+        add({
+          role: "assistant",
+          text:
+            "This one needs a person. I've securely packaged the evidence — your intent, the token, and the transaction — and handed your case to an American Express Care Professional. They'll pick it up with the full picture already in front of them.",
+        });
+        add({ role: "assistant", card: { kind: "escalated", c } });
+        setStage("escalated");
+      } else {
+        setStage("decided");
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "error");
-    } finally {
-      setBusy(false);
+      setTyping(false);
+      add({ role: "assistant", text: `⚠️ ${e instanceof Error ? e.message : "error"}` });
+      setStage("await_review");
     }
   }
 
-  async function act(action: string, reason?: string) {
-    if (!caseData) return;
-    const r = await fetch(`/api/cases/${caseData.case_id}`, {
+  async function resolve() {
+    const c = caseRef.current;
+    if (!c) return;
+    setStage("busy");
+    await fetch(`/api/cases/${c.case_id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, reason, actor: "card_member" }),
+      body: JSON.stringify({ action: "self_serve", actor: "card_member" }),
     });
-    const d = await r.json();
-    if (r.ok) setCaseData(d.case);
+    add({
+      role: "assistant",
+      text:
+        c.routing.route === "route"
+          ? "Done ✅ I've filed this under Amex Agent Purchase Protection on your behalf. You'll see the adjustment shortly — no call needed."
+          : "Done ✅ Sorted it out right here — the adjustment is on its way. No need to contact American Express.",
+    });
+    setStage("resolved");
   }
 
-  function reset() {
-    setStep("build");
-    setIntent(null);
-    setToken(null);
-    setCaseData(null);
-    setErr("");
+  async function escalateManually() {
+    const c = caseRef.current;
+    if (!c) return;
+    await fetch(`/api/cases/${c.case_id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "escalate", actor: "card_member" }),
+    });
+    add({ role: "user", text: "I'd rather talk to a person." });
+    add({
+      role: "assistant",
+      text:
+        "Of course. I've handed your case — with all the evidence attached — to an American Express Care Professional. You can track it in the Amex servicing portal.",
+    });
+    setStage("escalated");
   }
 
-  // quick "introduce a mistake" mutators for variety
-  function mutate(kind: string) {
-    setActual((a) => {
-      const n = { ...a };
-      if (kind === "overbudget") n.amount = Math.round((a.amount || 100) * 1.18 + 20);
-      if (kind === "date") n.date = (a.date || "the 14th") + " (next day)";
-      if (kind === "merchant") n.merchant = "StubHub";
-      if (kind === "qty") n.quantity = (a.quantity || 1) + 1;
-      if (kind === "bigticket") n.amount = 1850;
-      return n;
-    });
+  function newChat() {
+    _id = 0;
+    intentRef.current = null;
+    actualRef.current = null;
+    caseRef.current = null;
+    setMsgs([
+      {
+        id: nid(),
+        role: "assistant",
+        text: `Hi ${name.split(" ")[0]} 👋 What would you like me to buy?`,
+      },
+    ]);
+    setStage("await_intent");
+  }
+
+  function onSend() {
+    const t = input.trim();
+    if (!t || stage === "busy") return;
+    setInput("");
+    if (stage === "await_intent") startDelegation(t);
+    else if (stage === "await_review") dispute(t);
+    else add({ role: "user", text: t });
   }
 
   return (
     <>
-      <TopBar />
-      <main className="wrap section" style={{ maxWidth: 880 }}>
-        <p className="eyebrow">Amex app · Agentic commerce</p>
-        <h2 className="head">Delegate a purchase to your agent</h2>
-        <p className="sub">
-          Set up a delegation, let the agent buy, and see ACER decide — live —
-          whether the agent honored your intent. Nothing here is scripted: GPT
-          scores whatever you enter.
-        </p>
-
-        {err ? (
-          <div className="panel" style={{ marginTop: 18, borderColor: "var(--bad)", color: "var(--bad)" }}>
-            {err}
+      {/* Neutral 3rd-party assistant chrome (NOT the Amex app) */}
+      <div className="assistant-head">
+        <div className="wrap inner">
+          <div className="aibrand">
+            <span className="ai-logo">◇</span>
+            <span className="ai-name">
+              Concierge AI
+              <span>Your personal shopping assistant</span>
+            </span>
           </div>
-        ) : null}
-
-        {/* STEP 1 — build the intent */}
-        {step === "build" && (
-          <div className="card fade" style={{ marginTop: 20 }}>
-            <div className="row between center" style={{ marginBottom: 14 }}>
-              <h3>1 · Your delegation instruction</h3>
-              <button className="btn ghost sm" onClick={surprise}>🎲 Surprise me</button>
-            </div>
-            <div className="field">
-              <label className="fld">Card Member</label>
-              <input className="in" value={cardName} onChange={(e) => setCardName(e.target.value)} />
-            </div>
-            <div className="field">
-              <label className="fld">Tell your agent what to buy (natural language)</label>
-              <textarea className="in" value={instruction} onChange={(e) => setInstruction(e.target.value)} />
-              <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-                {INSTRUCTIONS.slice(0, 4).map((x, i) => (
-                  <button key={i} className="chip" style={{ cursor: "pointer", fontWeight: 500 }} onClick={() => setInstruction(x)}>
-                    {x.slice(0, 38)}…
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="field">
-              <label className="fld">Delegate to agent</label>
-              <select className="in" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
-                {agents.map((a) => (
-                  <option key={a.agent_id} value={a.agent_id}>
-                    {a.name} — {a.status}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button className="btn primary" onClick={lockIntent} disabled={busy}>
-              {busy ? <><span className="spinner" /> Locking intent…</> : "🔒 Lock intent & delegate"}
-            </button>
-          </div>
-        )}
-
-        {/* STEP 2 — intent locked, simulate the agent purchase */}
-        {step === "locked" && intent && token && (
-          <>
-            <div className="card accent fade" style={{ marginTop: 20 }}>
-              <div className="row between center">
-                <h3>Intent contract — locked ✓</h3>
-                <span className="badge b-info mono">{intent.proof_of_intent_token}</span>
-              </div>
-              {notes ? <div className="small muted" style={{ marginTop: 6 }}>{notes}</div> : null}
-              <div style={{ marginTop: 14 }}>
-                {Object.entries(intent.constraints)
-                  .filter(([, v]) => v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0))
-                  .map(([k, v]) => (
-                    <div className="kv" key={k}>
-                      <span className="k">{k.replace(/_/g, " ")}</span>
-                      <span className="v">{Array.isArray(v) ? v.join(", ") : String(v)}</span>
-                    </div>
-                  ))}
-              </div>
-              <div className="kv">
-                <span className="k">single-use payment token</span>
-                <span className="v mono">{token.token_id} · cap {token.spend_cap ?? "—"}</span>
-              </div>
-            </div>
-
-            <div className="card fade" style={{ marginTop: 16 }}>
-              <div className="row between center" style={{ marginBottom: 12 }}>
-                <h3>2 · What the agent actually bought</h3>
-                <div className="row" style={{ gap: 6 }}>
-                  <button className="btn outline sm" onClick={() => mutate("overbudget")}>+ over budget</button>
-                  <button className="btn outline sm" onClick={() => mutate("date")}>+ wrong date</button>
-                  <button className="btn outline sm" onClick={() => mutate("merchant")}>+ wrong merchant</button>
-                  <button className="btn outline sm" onClick={() => mutate("bigticket")}>+ big ticket</button>
-                </div>
-              </div>
-              <p className="small muted" style={{ marginTop: 0 }}>
-                Pre-filled from the intent. Edit any field to make the agent slip up — ACER scores it live.
-              </p>
-              <div className="grid2c" style={{ marginTop: 6 }}>
-                <div className="field">
-                  <label className="fld">Merchant</label>
-                  <input className="in" value={actual.merchant} onChange={(e) => setActual({ ...actual, merchant: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label className="fld">Amount (USD)</label>
-                  <input className="in" type="number" value={actual.amount} onChange={(e) => setActual({ ...actual, amount: Number(e.target.value) })} />
-                </div>
-                <div className="field">
-                  <label className="fld">Date</label>
-                  <input className="in" value={actual.date} onChange={(e) => setActual({ ...actual, date: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label className="fld">Quantity</label>
-                  <input className="in" type="number" value={actual.quantity} onChange={(e) => setActual({ ...actual, quantity: Number(e.target.value) })} />
-                </div>
-                <div className="field">
-                  <label className="fld">Item</label>
-                  <input className="in" value={actual.item} onChange={(e) => setActual({ ...actual, item: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label className="fld">Seat / variant pref</label>
-                  <input className="in" value={actual.seat_pref} onChange={(e) => setActual({ ...actual, seat_pref: e.target.value })} />
-                </div>
-              </div>
-              <div className="row" style={{ gap: 10 }}>
-                <button className="btn primary" onClick={runAnalysis} disabled={busy}>
-                  {busy ? <><span className="spinner" /> ACER is reading the evidence…</> : "Agent completes purchase → run ACER"}
+          <div className="row center" style={{ gap: 10, flexWrap: "wrap" }}>
+            <input className="in" style={{ width: 130, padding: "8px 11px" }} value={name} onChange={(e) => setName(e.target.value)} aria-label="Your name" />
+            <select className="in" style={{ width: 200, padding: "8px 11px" }} value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              {agents.map((a) => (
+                <option key={a.agent_id} value={a.agent_id}>
+                  {a.name} · {a.status === "verified" ? "Amex-registered" : "unregistered"}
+                </option>
+              ))}
+            </select>
+            <div className="seg" role="group" aria-label="Agent behavior">
+              {(["faithful", "slips", "rogue"] as Behavior[]).map((b) => (
+                <button key={b} className={behavior === b ? "on" : ""} onClick={() => setBehavior(b)}>
+                  {b === "faithful" ? "Faithful" : b === "slips" ? "Slips up" : "Goes rogue"}
                 </button>
-                <button className="btn outline" onClick={reset}>Start over</button>
+              ))}
+            </div>
+            <button className="btn outline sm" onClick={newChat}>New chat</button>
+            <Link href="/isp" className="btn ghost sm">Amex ISP ↗</Link>
+          </div>
+        </div>
+      </div>
+
+      <div className="chat">
+        <div className="msgs" ref={scrollRef}>
+          {msgs.map((m) => (
+            <Bubble key={m.id} m={m} />
+          ))}
+          {typing && (
+            <div className="msg assistant">
+              <span className="avatar ai">◇</span>
+              <div className="bubble">
+                <span className="typing"><i /><i /><i /></span>
               </div>
             </div>
-          </>
-        )}
+          )}
 
-        {/* STEP 3 — ACER verdict */}
-        {step === "result" && caseData && (
-          <div className="fade" style={{ marginTop: 20 }}>
-            <VerdictCard c={caseData} onAct={act} onReset={reset} />
+          {/* contextual action zone */}
+          {stage === "await_review" && !typing && (
+            <div className="msg assistant">
+              <span className="avatar ai" style={{ visibility: "hidden" }}>◇</span>
+              <div className="qr">
+                <button onClick={() => { add({ role: "user", text: "Looks good 👍" }); add({ role: "assistant", text: "Great — enjoy! 🎉 Anything else I can grab for you?" }); setStage("await_intent"); }}>Looks good 👍</button>
+                <button onClick={() => dispute()}>Something&apos;s off</button>
+              </div>
+            </div>
+          )}
+          {stage === "decided" && caseRef.current && !typing && (
+            <div className="msg assistant">
+              <span className="avatar ai" style={{ visibility: "hidden" }}>◇</span>
+              <div className="qr">
+                <button onClick={resolve}>
+                  {caseRef.current.routing.route === "route" ? "✓ File under Amex Protection" : "✓ Make it right — resolve now"}
+                </button>
+                <button onClick={escalateManually} style={{ borderColor: "var(--line)", color: "var(--muted)" }}>Talk to a person instead</button>
+              </div>
+            </div>
+          )}
+          {(stage === "resolved" || stage === "escalated") && (
+            <div className="msg assistant">
+              <span className="avatar ai" style={{ visibility: "hidden" }}>◇</span>
+              <div className="qr">
+                {stage === "escalated" && <Link href="/isp" className="btn deep sm">Track in Amex ISP →</Link>}
+                <button onClick={newChat}>Start a new request</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* composer */}
+        <div className="composer">
+          {stage === "await_intent" && msgs.length <= 1 && (
+            <div className="examples">
+              {EXAMPLES.map((x, i) => (
+                <button key={i} onClick={() => startDelegation(x)}>{x.slice(0, 46)}…</button>
+              ))}
+            </div>
+          )}
+          <div className="box">
+            <textarea
+              rows={1}
+              value={input}
+              placeholder={stage === "await_intent" ? "Tell Concierge AI what to buy…" : stage === "await_review" ? "Reply, or tell me what's wrong…" : "Type a message…"}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+              disabled={stage === "busy"}
+            />
+            <button className="btn primary" onClick={onSend} disabled={stage === "busy" || !input.trim()}>Send</button>
           </div>
-        )}
-      </main>
+        </div>
+      </div>
     </>
   );
 }
 
-function routeBadge(route: string) {
-  if (route === "self_serve") return <span className="badge b-good">Self-service</span>;
-  if (route === "route") return <span className="badge b-warn">Smart routing</span>;
-  return <span className="badge b-bad">Escalated to a colleague</span>;
+function Bubble({ m }: { m: Msg }) {
+  return (
+    <div className={"msg " + m.role}>
+      <span className={"avatar " + (m.role === "assistant" ? "ai" : "me")}>{m.role === "assistant" ? "◇" : "S"}</span>
+      <div className={"bubble" + (m.card ? " wide" : "")}>
+        {m.text}
+        {m.card ? <CardView card={m.card} /> : null}
+      </div>
+    </div>
+  );
 }
 
-function VerdictCard({
-  c,
-  onAct,
-  onReset,
-}: {
-  c: Case;
-  onAct: (a: string, r?: string) => void;
-  onReset: () => void;
-}) {
-  const resolved = c.status === "self_served" || c.status === "resolved";
+function routePill(route: string) {
+  if (route === "self_serve") return <span className="badge b-good">Resolved in chat</span>;
+  if (route === "route") return <span className="badge b-warn">Amex Protection</span>;
+  return <span className="badge b-bad">Sent to an Amex specialist</span>;
+}
+
+function CardView({ card }: { card: Card }) {
+  if (card.kind === "intent") {
+    const c = card.intent.constraints;
+    return (
+      <div className="ecard">
+        <div className="top">
+          <span>Intent locked</span>
+          <span className="amex-verify"><span className="m">AMEX</span> Proof-of-Intent</span>
+        </div>
+        <div className="in2">
+          {Object.entries(c)
+            .filter(([, v]) => v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0))
+            .map(([k, v]) => (
+              <div className="kv" key={k}>
+                <span className="k">{k.replace(/_/g, " ")}</span>
+                <span className="v">{Array.isArray(v) ? v.join(", ") : String(v)}</span>
+              </div>
+            ))}
+          <div className="kv">
+            <span className="k">single-use token</span>
+            <span className="v mono">{card.token.token_id}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (card.kind === "receipt") {
+    const p = card.purchase;
+    return (
+      <div className="ecard">
+        <div className="top"><span>Order confirmation</span><span className="mono">{p.merchant}</span></div>
+        <div className="in2">
+          <div className="kv"><span className="k">item</span><span className="v">{p.item}</span></div>
+          <div className="kv"><span className="k">amount</span><span className="v">{p.currency || "USD"} {p.amount}</span></div>
+          {p.date ? <div className="kv"><span className="k">date</span><span className="v">{p.date}</span></div> : null}
+          {p.quantity ? <div className="kv"><span className="k">quantity</span><span className="v">{p.quantity}</span></div> : null}
+          {p.seat_pref ? <div className="kv"><span className="k">seat / variant</span><span className="v">{p.seat_pref}</span></div> : null}
+        </div>
+      </div>
+    );
+  }
+  if (card.kind === "verdict") {
+    const c = card.c;
+    return (
+      <div className="ecard">
+        <div className="top">
+          <span className="amex-verify"><span className="m">AMEX</span> ACE Resolve · intent check</span>
+          {routePill(c.routing.route)}
+        </div>
+        <div className="in2">
+          <div className="row" style={{ gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+            <ScoreRing score={c.fidelity.score} size={88} />
+            <div style={{ flex: "1 1 240px" }}>
+              <div className="divtag">Intent fidelity · {Math.round(c.fidelity.confidence * 100)}% conf.</div>
+              <div style={{ fontWeight: 700, color: "var(--deep)", marginTop: 4, lineHeight: 1.4 }}>{c.fidelity.verdict}</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 12, overflowX: "auto" }}>
+            <FieldTable fields={c.fidelity.per_field} />
+          </div>
+          <div className="panel" style={{ marginTop: 12, background: "#fff" }}>
+            <div className="divtag">Recommended resolution</div>
+            <div style={{ fontWeight: 700, color: "var(--deep)", marginTop: 4 }}>{c.routing.remedy}</div>
+            <div className="small muted" style={{ marginTop: 4 }}>{c.routing.rationale}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  // escalated
+  const c = card.c;
   return (
-    <>
-      <div className="card accent">
-        <div className="row between center">
-          <p className="eyebrow" style={{ margin: 0 }}>You tapped “I didn&apos;t expect this”</p>
-          {routeBadge(c.routing.route)}
-        </div>
-        <div className="row" style={{ gap: 22, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
-          <ScoreRing score={c.fidelity.score} />
-          <div style={{ flex: "1 1 320px" }}>
-            <div className="divtag">Intent fidelity</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: "var(--deep)", marginTop: 6, lineHeight: 1.3 }}>
-              {c.fidelity.verdict}
-            </div>
-            <div className="small muted" style={{ marginTop: 8 }}>
-              Confidence {Math.round(c.fidelity.confidence * 100)}% · agent “{c.agent.name}” ({c.agent.status})
-            </div>
-          </div>
-        </div>
+    <div className="ecard">
+      <div className="top"><span className="amex-verify"><span className="m">AMEX</span> Case handed to servicing</span><span className="mono">{c.case_id}</span></div>
+      <div className="in2">
+        <div className="kv"><span className="k">case</span><span className="v mono">{c.case_id}</span></div>
+        <div className="kv"><span className="k">status</span><span className="v">Escalated to a Care Professional</span></div>
+        <div className="kv"><span className="k">evidence attached</span><span className="v">intent · token · agent · transaction</span></div>
       </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3>What your agent did vs. what you approved</h3>
-        <div style={{ marginTop: 12, overflowX: "auto" }}>
-          <FieldTable fields={c.fidelity.per_field} />
-        </div>
-      </div>
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <h3>Recommended resolution</h3>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "var(--deep)", marginTop: 8 }}>{c.routing.remedy}</div>
-        <div className="small muted" style={{ marginTop: 6 }}>{c.routing.rationale}</div>
-        <div className="small muted" style={{ marginTop: 6, fontStyle: "italic" }}>{c.routing.reason}</div>
-
-        {resolved ? (
-          <div className="panel" style={{ marginTop: 16, borderColor: "var(--good)", background: "#f1faf5" }}>
-            <span className="badge b-good">Resolved</span>{" "}
-            <span className="small">Handled in-app. A confirmation is on its way — no call needed.</span>
-          </div>
-        ) : (
-          <div className="row" style={{ gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-            {c.routing.route === "self_serve" && (
-              <button className="btn primary" onClick={() => onAct("self_serve")}>
-                ✓ Make it right — resolve in app
-              </button>
-            )}
-            {c.routing.route === "route" && (
-              <button className="btn deep" onClick={() => onAct("self_serve")}>
-                ✓ File under Agent Purchase Protection
-              </button>
-            )}
-            {c.routing.route === "colleague_assist" ? (
-              <>
-                <span className="small muted" style={{ alignSelf: "center" }}>
-                  This one needs a specialist — we&apos;ve prepared your case.
-                </span>
-                <Link href="/isp" className="btn deep">See it in the ISP →</Link>
-              </>
-            ) : (
-              <button className="btn outline" onClick={() => onAct("escalate")}>Talk to someone</button>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="row" style={{ marginTop: 16, gap: 10 }}>
-        <button className="btn outline" onClick={onReset}>Run another scenario</button>
-        <Link href="/isp" className="btn ghost">Open ISP queue</Link>
-      </div>
-    </>
+    </div>
   );
 }

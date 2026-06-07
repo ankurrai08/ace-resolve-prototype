@@ -10,17 +10,22 @@ for?), and routes the right next step: **self-serve**, **smart routing**, or
 This is a **working prototype that models the product in production**, not a mockup
 or extension. Two real, connected front-ends share one case store:
 
-- **`/app` — Card Member experience.** Delegate a purchase to a registered agent,
-  let the agent slip up, and watch ACER decide live, then self-serve the fix.
-- **`/isp` — Colleague (CCP) desktop.** Escalated cases land pre-built with the
-  fidelity score, field-by-field comparison, full evidence chain, a grounded
-  recommendation, and human Approve / Override / Escalate (RBAC).
+- **`/app` — third-party AI assistant (chat).** A ChatGPT/Claude-style assistant
+  ("Concierge AI"), **not** the Amex app. The customer delegates a purchase in
+  natural language; the agent locks the intent on Amex rails, autonomously shops
+  (LLM-simulated), reports back, and — when the customer disputes — ACER runs
+  **inside the chat** and resolves it. The journey only leaves the assistant when
+  a human is needed.
+- **`/isp` — Amex Colleague (CCP) desktop.** Escalated cases cross into Amex and
+  land pre-built with the fidelity score, field-by-field comparison, full evidence
+  chain, a grounded recommendation, and human Approve / Override / Escalate (RBAC).
 - **`/admin` — Governance.** Append-only audit log (model + prompt version per
   step) and a shadow-mode toggle.
 
-Nothing is hard-coded: the Card Member name, the natural-language intent, the
-agent, and what the agent actually bought are all driven from the UI, and **GPT
-computes every verdict live** from whatever you enter.
+Nothing is hard-coded: the customer name, the natural-language intent, the agent
+(registered vs. unregistered), and the agent's behavior (faithful / slips up /
+goes rogue) are all driven from the UI, and **GPT computes the agent's purchase
+and every verdict live** — no scripted outputs.
 
 ---
 
@@ -32,9 +37,10 @@ cp .env.example .env.local   # then add your OPENAI_API_KEY
 npm run dev                  # http://localhost:3000
 ```
 
-Open `/app`, build a delegation, introduce a mistake (handy "+ over budget /
-+ wrong date / + wrong merchant / + big ticket" buttons), run ACER, then escalate
-and view the same case in `/isp`.
+Open `/app`, set the agent's behavior to "Slips up", type a delegation (or tap an
+example), let Concierge AI shop and report back, tap **"Something's off"** to run
+ACER in-chat, then either resolve there or — for a tougher case (set behavior to
+"Goes rogue" or pick the unregistered agent) — watch it escalate into `/isp`.
 
 ### Environment (`.env.local`)
 

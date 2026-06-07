@@ -16,15 +16,15 @@ export default function Home() {
               Did the agent honor the Card Member&apos;s intent?
             </h1>
             <p className="sub" style={{ maxWidth: "54ch", color: "#b8cdec" }}>
-              When an AI agent buys on a Card Member&apos;s behalf through Amex
-              Agentic Commerce (ACE), ACER reads the whole story — intent, cart,
-              token, agent, transaction — scores intent fidelity with GPT, and
-              routes the right next step: self-serve, smart routing, or
-              colleague-assisted.
+              A customer delegates a purchase inside a third-party AI assistant.
+              The agent buys on Amex rails — and slips up. ACER reads the whole
+              story — intent, cart, token, agent, transaction — scores intent
+              fidelity with GPT, and resolves it right inside the chat, escalating
+              to an Amex Care Professional only when a human is needed.
             </p>
             <div className="row" style={{ marginTop: 28, flexWrap: "wrap" }}>
               <Link href="/app" className="btn primary">
-                Open the Card Member experience →
+                Open the agent chat →
               </Link>
               <Link href="/isp" className="btn outline" style={{ background: "transparent", color: "#fff", borderColor: "rgba(140,180,235,.4)" }}>
                 Open the ISP (colleague) desktop
